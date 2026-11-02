@@ -50,6 +50,24 @@ The container runs on Python 3.12, listens on `0.0.0.0:7860`, and downloads the
 Chinook SQL source into its local cache on first startup. The `.env` file is
 excluded from the Docker build context.
 
+## Deploy to Render
+
+The repository includes a Render Blueprint in `render.yaml`. To deploy:
+
+1. Open the [Render Blueprint creation page](https://dashboard.render.com/blueprint/new)
+   and connect this GitHub repository.
+2. Select the `main` branch and review the `chinook-music-support` web service.
+3. Enter `OPENAI_API_KEY` and `OPENAI_MODEL` when Render prompts for them.
+   Keep secrets in Render's environment settings; never commit them to the repo.
+4. Create the Blueprint and wait for the Docker build and health check to finish.
+5. Open the `onrender.com` URL shown on the service page.
+
+The service binds to Render's `PORT` value and uses `/` for its health check.
+The Free plan can spin down while idle, so the first request after inactivity
+may take longer. Preference memory and the downloaded SQL cache are in the
+container's ephemeral storage; memory is per process and does not survive a
+restart or redeploy.
+
 ## Test
 
 ```powershell
