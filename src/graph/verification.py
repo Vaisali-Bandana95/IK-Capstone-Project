@@ -125,8 +125,6 @@ def _lookup_phone(phone: str) -> int | None:
             continue
         if comparable == stored_comparable:
             return int(row["CustomerId"])
-        if len(stored_comparable) >= 10 and comparable[-10:] == stored_comparable[-10:]:
-            return int(row["CustomerId"])
     return None
 
 
@@ -137,6 +135,8 @@ def _lookup_customer(identifier: str) -> int | None:
         return None
 
     if identifier_type == "customer_id":
+        if len(candidate) > 10:
+            return _lookup_phone(candidate) if len(candidate) <= 15 else None
         customer_id = int(candidate)
         if customer_id < 1 or customer_id > 2_147_483_647:
             return _lookup_phone(candidate)

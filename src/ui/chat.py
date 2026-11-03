@@ -9,8 +9,8 @@ from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.types import Command
 
 from src.agents.supervisor import build_support_graph
-from src.config import settings
 from src.db import initialize_database
+from src.graph.persistence import create_persistent_checkpointer
 
 logger = logging.getLogger(__name__)
 
@@ -458,8 +458,8 @@ def respond(
             session_id,
             gr.update(interactive=True),
         )
-    except Exception as error:
-        logger.error("Chat graph invocation failed (%s)", type(error).__name__)
+    except Exception:
+        logger.exception("Chat graph invocation failed")
         chat_history.append(
             {
                 "role": "assistant",
@@ -487,7 +487,12 @@ def reset_conversation() -> tuple[list[dict[str, str]], str, str, str, Any]:
 
 def create_demo(graph: Any | None = None) -> gr.Blocks:
     initialize_database()
-    support_graph = graph if graph is not None else build_support_graph()
+    if graph is None:
+        support_graph = build_support_graph(
+            checkpointer=create_persistent_checkpointer()
+        )
+    else:
+        support_graph = graph
 
     with gr.Blocks(
         title="Chinook Music Support",
@@ -559,9 +564,9 @@ def create_demo(graph: Any | None = None) -> gr.Blocks:
                         <div class="privacy-card">
                             <strong>Protected account access</strong>
                             <span>
-                                We’ll verify your identity before showing invoices
-                                or purchase details. Use your Customer ID, email,
-                                or phone when prompted.
+                                Demo account lookup is required before invoices or
+                                purchases. Use your sample Customer ID, email, or
+                                phone when prompted. Not real-world authentication.
                             </span>
                         </div>
                         """,

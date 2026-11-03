@@ -1,3 +1,9 @@
+import json
+import logging
+import os
+import sqlite3
+import threading
+from pathlib import Path
 from typing import Annotated, Any, TypedDict
 
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
@@ -11,6 +17,7 @@ from src.config import settings
 MEMORY_NAMESPACE = "memory_profile"
 MEMORY_KEY = "user_memory"
 PREFERENCE_CONTEXT_MESSAGE_ID = "saved-music-preferences"
+logger = logging.getLogger(__name__)
 
 MEMORY_EXTRACTION_PROMPT = """Extract only explicit music preferences stated by the customer in their own messages.
 Save direct, positive preference statements such as “I love rock”, “AC/DC is my
@@ -133,17 +140,24 @@ def create_memory_node(model=None):
             return {}
 
         active_extractor = extractor or _preference_extractor()
-        profile = active_extractor.invoke(
-            [
-                SystemMessage(
-                    content=(
-                        f"{MEMORY_EXTRACTION_PROMPT}\n"
-                        f"The verified customer_id is {customer_id}."
-                    )
-                ),
-                HumanMessage(content=excerpt),
-            ]
-        )
+        try:
+            profile = active_extractor.invoke(
+                [
+                    SystemMessage(
+                        content=(
+                            f"{MEMORY_EXTRACTION_PROMPT}\n"
+                            f"The verified customer_id is {customer_id}."
+                        )
+                    ),
+                    HumanMessage(content=excerpt),
+                ]
+            )
+        except Exception as error:  # noqa: BLE001 - extraction failures must not block replies
+            logger.warning(
+                "Preference extraction failed (%s); continuing without a memory update",
+                type(error).__name__,
+            )
+            return {}
         if profile.customer_id != customer_id:
             return {}
 
@@ -180,5 +194,66 @@ def create_memory_node(model=None):
     return create_memory
 
 
+class PersistentPreferenceStore(InMemoryStore):
+    """Keep LangGraph's existing store API while persisting user profiles in SQLite.
+
+    The educational app uses namespace/key put/get for customer preferences.
+    This implementation persists those calls without adding another package.
+    A single container/process owns the store; use an external managed database
+    instead when deploying multiple replicas.
+    """
+
+    def __init__(self, path: str | Path):
+        super().__init__()
+        self.path = Path(path).expanduser().resolve()
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._db_lock = threading.RLock()
+        self._db = sqlite3.connect(
+            str(self.path),
+            check_same_thread=False,
+            timeout=30,
+        )
+        self._db.execute("PRAGMA busy_timeout = 30000")
+        self._db.execute("PRAGMA journal_mode = WAL")
+        self._db.execute("""CREATE TABLE IF NOT EXISTS preference_profiles (
+            customer_id TEXT NOT NULL PRIMARY KEY,
+            document TEXT NOT NULL
+        )""")
+        self._db.commit()
+        for customer_id, raw_value in self._db.execute(
+            "SELECT customer_id, document FROM preference_profiles"
+        ).fetchall():
+            try:
+                value = json.loads(raw_value)
+                if isinstance(value, dict):
+                    super().put((MEMORY_NAMESPACE, customer_id), MEMORY_KEY, value)
+            except (ValueError, TypeError):
+                continue
+
+    def put(self, namespace, key, value, index=None):
+        # Save first, then update the in-memory index, so a failed write is not
+        # falsely presented as a persisted preference.
+        if (len(namespace) == 2 and namespace[0] == MEMORY_NAMESPACE
+                and key == MEMORY_KEY):
+            with self._db_lock:
+                self._db.execute(
+                    """INSERT INTO preference_profiles (customer_id, document)
+                       VALUES (?, ?)
+                       ON CONFLICT(customer_id) DO UPDATE SET document=excluded.document""",
+                    (str(namespace[1]), json.dumps(value)),
+                )
+                self._db.commit()
+                return super().put(namespace, key, value, index=index)
+        return super().put(namespace, key, value, index=index)
+
+    def close(self) -> None:
+        with self._db_lock:
+            self._db.close()
+
+
 def create_memory_store() -> InMemoryStore:
-    return InMemoryStore()
+    # Persist customer profiles in the app data directory or configured volume.
+    path = os.getenv("MEMORY_DB_PATH") or str(
+        Path(__file__).resolve().parents[2] / "app" / "data" / "preferences.sqlite3"
+    )
+    return PersistentPreferenceStore(path)

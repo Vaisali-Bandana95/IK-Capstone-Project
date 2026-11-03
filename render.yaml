@@ -10,6 +10,12 @@ services:
     envVars:
       - key: PORT
         value: "10000"
+      - key: MEMORY_DB_PATH
+        value: /data/preferences.sqlite3
+      - key: CHECKPOINT_DB_PATH
+        value: /data/checkpoints.sqlite3
+      - key: CHINOOK_CACHE_PATH
+        value: /data/Chinook_Sqlite.sql
       - key: OPENAI_API_KEY
         sync: false
       - key: OPENAI_MODEL

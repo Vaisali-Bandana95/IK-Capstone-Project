@@ -11,6 +11,7 @@ from src.tools.music import (
     get_albums_by_artist,
     get_songs_by_genre,
     get_track_details,
+    get_tracks_by_album,
     get_tracks_by_artist,
 )
 
@@ -18,6 +19,7 @@ from .prompts import MUSIC_AGENT_PROMPT
 
 MUSIC_TOOLS = [
     get_albums_by_artist,
+    get_tracks_by_album,
     get_tracks_by_artist,
     get_songs_by_genre,
     check_for_songs,

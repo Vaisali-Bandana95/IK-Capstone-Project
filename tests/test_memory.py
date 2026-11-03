@@ -41,6 +41,14 @@ class ExplicitJazzExtractor(FixedProfileModel):
         return UserProfile(customer_id=5, music_preferences=preferences)
 
 
+class FailingPreferenceModel:
+    def with_structured_output(self, schema):
+        return self
+
+    def invoke(self, messages):
+        raise RuntimeError("model unavailable")
+
+
 def state_for(
     customer_id: int,
     *messages,
@@ -162,6 +170,19 @@ def test_no_new_preferences_skips_write_and_preserves_existing_profile() -> None
     assert model.calls == 1
     assert before == after
     assert result == {}
+
+
+def test_preference_extraction_failure_does_not_block_response() -> None:
+    store = InMemoryStore()
+    create_node = create_memory_node(FailingPreferenceModel())
+
+    result = create_node(
+        state_for(5, HumanMessage(content="I love jazz")),
+        store=store,
+    )
+
+    assert result == {}
+    assert store.get((MEMORY_NAMESPACE, "5"), MEMORY_KEY) is None
 
 
 def test_unverified_customer_preferences_are_not_extracted_or_saved() -> None:

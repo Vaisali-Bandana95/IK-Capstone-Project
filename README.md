@@ -1,110 +1,95 @@
-# Chinook Music Support
+# Chinook Music Support — Capstone patch
 
-A Gradio support chat for the Chinook digital music store dataset. Customers
-verify their identity before accessing invoice or purchase information. A
-supervisor routes catalog requests to a music agent and account requests to an
-invoice agent. Catalog and account facts are returned by parameterized database
-tools; verified customer preferences can personalize suggestions.
+A Gradio chat for the Chinook digital music database. A LangGraph supervisor classifies incoming requests and routes them to scoped catalog and invoice agents using explicit conditional graph edges. Ten SQLAlchemy tools cover catalog searches (including complete track lists by album) and invoice lookups.
+
+> **Important:** Matching a customer ID, email or phone to the demo Chinook database is the capstone's *lookup-based identity gate*, **not** secure authentication. Do not upload real customer records or expose private invoices on the public internet without adding a proper authentication mechanism.
 
 ## Requirements
 
-- Python 3.12
-- An OpenAI-compatible API key and model for live LLM conversations
-- Docker is optional
+- Python 3.12, or Docker Desktop with Docker Compose
+- An OpenAI-compatible API key and tool-calling + structured-output-capable model
+- Internet access for first-run download of the public Chinook SQL dataset (or pre-populate the cache)
 
-## Setup
+## Quick start: Docker Desktop (preferred)
 
-Create and activate a Python 3.12 virtual environment:
+```powershell
+Copy-Item .env.example .env
+# Edit .env and set OPENAI_API_KEY and OPENAI_MODEL.
+docker compose up --build -d
+docker compose logs --tail 100 -f
+```
+
+Then visit <http://127.0.0.1:7861>. Docker Compose maps host port 7861 to the
+container's Gradio port 7860 and stores customer preferences,
+conversation checkpoints, and the downloaded Chinook SQL in a named volume so
+they survive container restarts and recreation. Stop with `docker compose down`;
+the named volume is retained. To remove it and its data intentionally, run
+`docker compose down -v`.
+
+## Python local development
 
 ```powershell
 py -3.12 -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
 Copy-Item .env.example .env
+# Set the API key and model in .env.
+.\.venv\Scripts\python.exe app.py
 ```
 
-Set `OPENAI_API_KEY` and `OPENAI_MODEL` in `.env`. `OPENAI_API_BASE` is optional
-for OpenAI-compatible endpoints. The SQL source is downloaded from the URL in
-`CHINOOK_SQL_URL` once and cached locally at `CHINOOK_CACHE_PATH`. Both settings
-can be overridden in `.env`.
+## Render deployment
 
-## Run
+`render.yaml` targets Render's **Free** plan. Set `OPENAI_API_KEY` and
+`OPENAI_MODEL` using Render's Blueprint setup form or environment variables.
+Render Free does not provide a persistent disk: local SQLite preferences,
+conversation checkpoints, and the SQL cache can be lost when the service spins
+down or redeploys. Use Docker Compose with its named volume for durable local
+storage. To retain data on Render, choose a paid plan that supports a persistent
+disk and configure that disk in the Render dashboard.
+
+See [DEPLOYMENT_AND_TESTING.md](DEPLOYMENT_AND_TESTING.md) for precise commands, manual demo acceptance checks, failure diagnosis and deployment limitations.
+
+## Tests
 
 ```powershell
-python app.py
+.\.venv\Scripts\python.exe -m pip check
+.\.venv\Scripts\python.exe -m pytest -q
 ```
 
-Open `http://localhost:7860` (or the configured `PORT`). Each browser session is
-assigned a UUID thread ID. Use **New conversation** to clear the chat and start a
-new verification flow; preference memory remains associated with the verified
-customer in the current application process.
+Most test cases use deterministic fake models, so no real LLM usage is required. Integration tests need the public Chinook SQL dataset on first execution. GitHub Actions CI (`.github/workflows/ci.yaml`) installs the pinned dependencies, runs tests, and builds the image.
 
-## Run with Docker
+## Expected scenarios
 
-```powershell
-docker build -t chinook-music-support .
-docker run --env-file .env -p 7860:7860 chinook-music-support
-```
-
-The container runs on Python 3.12, listens on `0.0.0.0:7860`, and downloads the
-Chinook SQL source into its local cache on first startup. The `.env` file is
-excluded from the Docker build context.
-
-## Deploy to Render
-
-The repository includes a Render Blueprint in `render.yaml`. To deploy:
-
-1. Open the [Render Blueprint creation page](https://dashboard.render.com/blueprint/new)
-   and connect this GitHub repository.
-2. Select the `main` branch and review the `chinook-music-support` web service.
-3. Enter `OPENAI_API_KEY` and `OPENAI_MODEL` when Render prompts for them.
-   Keep secrets in Render's environment settings; never commit them to the repo.
-4. Create the Blueprint and wait for the Docker build and health check to finish.
-5. Open the `onrender.com` URL shown on the service page.
-
-The service binds to Render's `PORT` value and uses `/` for its health check.
-The Free plan can spin down while idle, so the first request after inactivity
-may take longer. Preference memory and the downloaded SQL cache are in the
-container's ephemeral storage; memory is per process and does not survive a
-restart or redeploy.
-
-## Test
-
-```powershell
-python -m pytest tests/ -v
-```
-
-Most tests use deterministic local fake models and do not call the configured
-LLM API. They cover SQL tools, identity verification and interrupt/resume,
-supervisor routing, session-scoped graph state, and preference memory.
-
-## Sample usage
-
-1. Start with a Customer ID, email, or phone number when asked to verify.
-2. Ask: “What rock albums do you have?”
-3. Ask: “Show me my invoices.”
-4. State a preference, for example: “I love jazz.”
-5. Ask for music suggestions in a later turn; the saved preference can inform
-   recommendations, while catalog facts still come from music tools.
-6. Select **New conversation** to reset the chat. A new thread requires identity
-   verification again.
+1. Ask to see invoices -> app prompts for sample customer ID/email/phone -> a correct match permits the account-scoped invoice specialist.
+2. Ask for rock albums -> supervisor goes directly to the catalog specialist -> show an artist-diverse sample and distinct album/track/artist counts.
+3. After lookup, ask about purchases -> the invoice specialist uses the customer ID from graph state, not from user text.
+4. State `I really love jazz and AC/DC` while verified -> preferences are merged per customer; they are reloaded in later conversations, including after a Docker restart with the persistent volume.
+5. Ask `What's the weather today?` -> supervisor directly rejects the request, with no specialist called.
+6. Enter customer ID `99999` -> lookup fails -> graph pauses and asks for another ID/email/phone.
+7. Ask both invoice and catalog questions in one message -> explicit sequential invoice then music specialist execution.
+8. Ask how much you spent -> the invoice list tool returns a SQL-calculated `total_spent` field; the LLM is told not to calculate totals itself.
 
 ## Architecture
 
 ```text
-Gradio Blocks UI
-  └─ per-session UUID thread_id
-      └─ LangGraph support graph (checkpointer)
-          ├─ verify_info
-          │   └─ human_input interrupt / resume
-          ├─ load_memory (InMemoryStore per verified customer)
-          ├─ supervisor (langgraph-supervisor)
-          │   ├─ music agent (assistant ↔ catalog ToolNode)
-          │   └─ invoice agent (prebuilt ReAct agent)
-          └─ create_memory (structured preference extraction and merge)
+Gradio Blocks UI (session UUID, interrupt/resume handling)
+  └─ LangGraph supervised support graph
+       ├─ supervisor route/classify
+       │   ├─ off_topic -> direct refusal (END)
+       │   ├─ verify -> customer lookup -> customer-specific memory
+       │   ├─ music -> catalog specialist -> reply
+       │   ├─ invoice -> verified ID check -> invoice specialist -> reply
+       │   └─ mixed -> verified ID check -> invoice specialist -> music specialist -> reply
+       ├─ account identification by ID/email/phone with retry interrupts
+       ├─ preferences in SQLite
+       └─ conversation checkpoints in SQLite
+
+Music specialist: six LangChain tools -> parameterized Chinook SQL
+Invoice specialist: four LangChain tools -> verified customer ID injected by RunnableConfig
 ```
 
-Invoice tools receive the verified customer ID from trusted graph runtime
-configuration, not an LLM-selected argument. Preference profiles are isolated
-in memory by customer ID, merge by case-insensitive set union, and are lost when
-the process restarts.
+The Chinook music catalog is read-only and loaded into an in-memory SQLite
+database at startup. The source SQL is cached separately. Customer preferences
+and LangGraph conversation checkpoints use separate persistent SQLite
+databases. With Docker Compose, all three files are stored in the `chinook-data`
+named volume. Render Free's filesystem is ephemeral, so it does not guarantee
+persistence.

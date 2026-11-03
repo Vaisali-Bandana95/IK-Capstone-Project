@@ -1,0 +1,19 @@
+services:
+  music-support:
+    build: .
+    image: chinook-music-support:capstone
+    ports:
+      - "7861:7860"
+    env_file:
+      - .env
+    environment:
+      PORT: "7860"
+      MEMORY_DB_PATH: /data/preferences.sqlite3
+      CHECKPOINT_DB_PATH: /data/checkpoints.sqlite3
+      CHINOOK_CACHE_PATH: /data/Chinook_Sqlite.sql
+    volumes:
+      - chinook-data:/data
+    restart: unless-stopped
+
+volumes:
+  chinook-data:

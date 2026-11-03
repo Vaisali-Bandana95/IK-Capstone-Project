@@ -9,6 +9,7 @@ from .music import (
     get_albums_by_artist,
     get_songs_by_genre,
     get_track_details,
+    get_tracks_by_album,
     get_tracks_by_artist,
 )
 
@@ -20,6 +21,7 @@ __all__ = [
     "get_invoices_by_customer_sorted_by_date",
     "get_songs_by_genre",
     "get_track_details",
+    "get_tracks_by_album",
     "get_tracks_by_artist",
     "get_tracks_by_price",
 ]

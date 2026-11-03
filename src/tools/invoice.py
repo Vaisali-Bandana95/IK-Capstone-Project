@@ -15,7 +15,8 @@ def get_invoices_by_customer_sorted_by_date(customer_id: str) -> str:
         SELECT InvoiceId AS invoice_id, InvoiceDate AS invoice_date,
                BillingAddress AS billing_address, BillingCity AS billing_city,
                BillingState AS billing_state, BillingCountry AS billing_country,
-               BillingPostalCode AS billing_postal_code, Total AS total
+               BillingPostalCode AS billing_postal_code, Total AS total,
+               printf('%.2f', SUM(Total) OVER ()) AS total_spent
         FROM Invoice
         WHERE CustomerId = :customer_id
         ORDER BY InvoiceDate DESC, InvoiceId DESC

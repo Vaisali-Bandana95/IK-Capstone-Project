@@ -2,6 +2,7 @@ import json
 
 import pytest
 
+from src.db import execute_query
 from src.tools import (
     check_for_songs,
     get_albums_by_artist,
@@ -10,6 +11,7 @@ from src.tools import (
     get_invoices_by_customer_sorted_by_date,
     get_songs_by_genre,
     get_track_details,
+    get_tracks_by_album,
     get_tracks_by_artist,
     get_tracks_by_price,
 )
@@ -21,9 +23,10 @@ def invoke(tool, **arguments) -> object:
     return json.loads(result)
 
 
-def test_all_nine_functions_are_langchain_tools() -> None:
+def test_all_ten_functions_are_langchain_tools() -> None:
     tools = (
         get_albums_by_artist,
+        get_tracks_by_album,
         get_tracks_by_artist,
         get_songs_by_genre,
         check_for_songs,
@@ -34,8 +37,50 @@ def test_all_nine_functions_are_langchain_tools() -> None:
         get_invoice_line_items,
     )
 
-    assert len(tools) == 9
+    assert len(tools) == 10
     assert all(hasattr(tool, "invoke") for tool in tools)
+
+
+def test_get_tracks_by_album_returns_every_track_with_artist() -> None:
+    result = invoke(get_tracks_by_album, album_title="Into the Light")
+    expected_count = json.loads(
+        execute_query(
+            """
+            SELECT COUNT(*) AS count
+            FROM Track
+            JOIN Album ON Album.AlbumId = Track.AlbumId
+            WHERE LOWER(Album.Title) = LOWER(:title)
+            """,
+            {"title": "Into the Light"},
+        )
+    )[0]["count"]
+
+    assert result["tracks"]
+    assert result["total_count"] == len(result["tracks"]) == expected_count
+    assert result["truncated"] is False
+    assert all(track["album"] == "Into The Light" for track in result["tracks"])
+    assert all(track["artist"] == "David Coverdale" for track in result["tracks"])
+    assert all(track["title"] for track in result["tracks"])
+
+
+def test_get_tracks_by_album_fuzzy_matches_typos() -> None:
+    result = invoke(get_tracks_by_album, album_title="Into teh Light")
+
+    assert result["tracks"]
+    assert all(track["album"] == "Into The Light" for track in result["tracks"])
+
+
+@pytest.mark.parametrize("album_title", ["", "   "])
+def test_get_tracks_by_album_rejects_empty_title(album_title: str) -> None:
+    result = invoke(get_tracks_by_album, album_title=album_title)
+
+    assert result["code"] == "INVALID_INPUT"
+
+
+def test_get_tracks_by_album_not_found() -> None:
+    result = invoke(get_tracks_by_album, album_title="No Such Album")
+
+    assert "No tracks found" in result["message"]
 
 
 def test_get_albums_by_artist_found() -> None:

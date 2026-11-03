@@ -4,8 +4,10 @@ from typing import Any
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
+from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, MessagesState, StateGraph
 from langgraph.types import Command
+from pydantic import PrivateAttr
 
 from src.agents.invoice_agent import build_invoice_agent, build_invoice_tools
 from src.agents.music_agent import MUSIC_TOOLS, build_music_agent
@@ -14,7 +16,7 @@ from src.agents.prompts import (
     MUSIC_AGENT_PROMPT,
     SUPERVISOR_PROMPT,
 )
-from src.agents.supervisor import build_support_graph, build_supervisor
+from src.agents.supervisor import build_supervisor, build_support_graph
 from src.graph import UserInput
 from src.graph.memory import MEMORY_KEY, MEMORY_NAMESPACE, UserProfile
 
@@ -85,15 +87,52 @@ class ToolCallingModel:
         return AIMessage(content="AC/DC has albums in the catalog.")
 
 
+class AlbumTrackListModel:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def bind_tools(self, tools):
+        self.tools = tools
+        return self
+
+    def invoke(self, messages):
+        self.calls += 1
+        if self.calls == 1:
+            return AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "get_tracks_by_album",
+                        "args": {"album_title": "Into the Light"},
+                        "id": "album-tracks",
+                        "type": "tool_call",
+                    }
+                ],
+            )
+
+        tool_result = next(
+            message
+            for message in reversed(messages)
+            if isinstance(message, ToolMessage)
+            and message.name == "get_tracks_by_album"
+        )
+        tracks = json.loads(tool_result.content)["tracks"]
+        return AIMessage(
+            content="\n".join(
+                f"- {track['title']} — {track['artist']}" for track in tracks
+            )
+        )
+
+
 class DeterministicSupervisorModel(BaseChatModel):
-    bound_tools: list[Any] = []
+    _bound_tools: list[Any] = PrivateAttr(default_factory=list)
 
     @property
     def _llm_type(self) -> str:
         return "deterministic-supervisor-test"
 
     def bind_tools(self, tools, **kwargs):
-        self.bound_tools = list(tools)
+        self._bound_tools = list(tools)
         return self
 
     def _generate(self, messages, stop=None, run_manager=None, **kwargs):
@@ -132,7 +171,7 @@ class DeterministicSupervisorModel(BaseChatModel):
             message = AIMessage(content=content)
         else:
             handoff_name = f"transfer_to_{next_agent}"
-            assert handoff_name in {tool.name for tool in self.bound_tools}
+            assert handoff_name in {tool.name for tool in self._bound_tools}
             message = AIMessage(
                 content="",
                 tool_calls=[
@@ -182,10 +221,32 @@ def test_music_agent_runs_assistant_tool_assistant_loop() -> None:
 
     result = agent.invoke({"messages": [HumanMessage(content="Albums by AC/DC?")]})
 
-    assert len(MUSIC_TOOLS) == 5
+    assert len(MUSIC_TOOLS) == 6
     assert model.calls == 2
     assert "AC/DC has albums" in result["messages"][-1].content
     assert any(message.type == "tool" for message in result["messages"])
+
+
+def test_music_agent_returns_all_tracks_for_an_album_request() -> None:
+    model = AlbumTrackListModel()
+    agent = build_music_agent(model)
+
+    result = agent.invoke(
+        {"messages": [HumanMessage(content="Share all songs from Into the Light")]}
+    )
+
+    answer = result["messages"][-1].content
+    tool_result = next(
+        message
+        for message in result["messages"]
+        if isinstance(message, ToolMessage)
+        and message.name == "get_tracks_by_album"
+    )
+    tracks = json.loads(tool_result.content)["tracks"]
+    assert model.calls == 2
+    assert len(tracks) == 12
+    assert all(track["title"] in answer for track in tracks)
+    assert all(track["artist"] in answer for track in tracks)
 
 
 def test_music_agent_prompt_includes_loaded_preference_context() -> None:
@@ -205,6 +266,19 @@ def test_music_agent_prompt_includes_loaded_preference_context() -> None:
 
     prompt = model.received_messages[0][0].content
     assert "Music Preferences: jazz" in prompt
+
+
+def test_music_prompt_requires_full_album_track_lists() -> None:
+    model = ToolCallingModel()
+    agent = build_music_agent(model)
+    agent.invoke(
+        {"messages": [HumanMessage(content="List every track on Into the Light")]}
+    )
+
+    prompt = model.received_messages[0][0].content
+    assert "get_tracks_by_album" in prompt
+    assert "list every returned track title with its artist" in prompt
+    assert "do not omit entries" in prompt
 
 
 def test_music_agent_genre_tool_returns_real_album_data() -> None:
@@ -340,6 +414,7 @@ def test_support_graph_has_verification_supervisor_and_memory_nodes() -> None:
     graph = build_support_graph(
         model=llm,
         verification_llm=EchoIdentifierLLM(),
+        checkpointer=MemorySaver(),
         supervisor=RecordingSupervisor(),
         memory_model=EmptyPreferenceLLM(),
     )
@@ -377,6 +452,7 @@ def test_support_graph_verifies_then_routes_to_supervisor() -> None:
     supervisor = RecordingSupervisor()
     graph = build_support_graph(
         verification_llm=EchoIdentifierLLM(),
+        checkpointer=MemorySaver(),
         supervisor=supervisor,
         memory_model=EmptyPreferenceLLM(),
     )
@@ -397,6 +473,7 @@ def test_support_graph_interrupts_and_resumes_before_supervisor() -> None:
     supervisor = RecordingSupervisor()
     graph = build_support_graph(
         verification_llm=EchoIdentifierLLM(),
+        checkpointer=MemorySaver(),
         supervisor=supervisor,
         memory_model=EmptyPreferenceLLM(),
     )
@@ -423,6 +500,7 @@ def test_support_graph_saves_preferences_and_loads_them_next_turn() -> None:
     supervisor = RecordingSupervisor()
     graph = build_support_graph(
         verification_llm=EchoIdentifierLLM(),
+        checkpointer=MemorySaver(),
         supervisor=supervisor,
         memory_model=JazzPreferenceLLM(),
         store=store,
