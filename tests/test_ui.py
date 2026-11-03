@@ -119,3 +119,10 @@ def test_create_demo_builds_gradio_blocks_without_live_model() -> None:
     demo = create_demo(graph=FakeGraph())
 
     assert isinstance(demo, gr.Blocks)
+    config = demo.get_config_file()
+    button_values = [
+        component.get("props", {}).get("value", "")
+        for component in config["components"]
+        if component.get("type") == "button"
+    ]
+    assert not any("&nbsp;" in value for value in button_values)

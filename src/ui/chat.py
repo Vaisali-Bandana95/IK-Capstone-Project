@@ -87,6 +87,9 @@ body, .gradio-container {
 }
 
 #brand-header .secure-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
     flex-shrink: 0;
     padding: 9px 13px;
     border: 1px solid rgba(191,219,254,.25);
@@ -509,7 +512,10 @@ def create_demo(graph: Any | None = None) -> gr.Blocks:
                             <p>Your personal concierge for music and account support.</p>
                         </div>
                     </div>
-                    <div class="secure-label">● &nbsp; Secure customer portal</div>
+                    <div class="secure-label">
+                        <span aria-hidden="true">●</span>
+                        <span>Capstone demo portal</span>
+                    </div>
                 </header>
                 """,
                 elem_id="brand-header",
@@ -537,15 +543,15 @@ def create_demo(graph: Any | None = None) -> gr.Blocks:
                     )
                     gr.Markdown("Popular topics", elem_classes=["section-label"])
                     catalog_prompt = gr.Button(
-                        "♫  Explore the music catalog",
+                        "♫ Explore the music catalog",
                         elem_classes=["prompt-button"],
                     )
                     invoice_prompt = gr.Button(
-                        "▤  View my invoices",
+                        "▤ View my invoices",
                         elem_classes=["prompt-button"],
                     )
                     preferences_prompt = gr.Button(
-                        "✧  Get music recommendations",
+                        "✧ Get music recommendations",
                         elem_classes=["prompt-button"],
                     )
                     gr.HTML(
