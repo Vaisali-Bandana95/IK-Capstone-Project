@@ -512,6 +512,11 @@ def test_support_graph_saves_preferences_and_loads_them_next_turn() -> None:
         config=config,
     )
 
+    graph.invoke(
+        {"messages": [HumanMessage(content="I love jazz")]},
+        config=config,
+    )
+
     saved = store.get((MEMORY_NAMESPACE, "5"), MEMORY_KEY)
     assert saved is not None
     assert saved.value["music_preferences"] == ["jazz"]

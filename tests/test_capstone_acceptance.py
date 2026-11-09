@@ -98,6 +98,46 @@ def test_invoice_requires_verification_and_does_not_lose_original_question():
     assert calls[0][2]["configurable"]["verified_customer_id"] == 5
 
 
+def test_purchased_tracks_question_routes_to_invoice_agent():
+    calls = []
+    graph = build_offline_graph(calls)
+    thread_config = config("purchased-tracks")
+
+    state = graph.invoke(
+        {"messages": [HumanMessage(content="what tracks have I purchased?")]},
+        config=thread_config,
+    )
+
+    assert not state.get("verified")
+    assert calls == []
+
+    state = graph.invoke(Command(resume="5"), config=thread_config)
+
+    assert state["verified"] is True
+    assert len(calls) == 1
+    assert calls[0][0] == "invoice"
+    assert calls[0][1] == "what tracks have I purchased?"
+    assert calls[0][2]["configurable"]["verified_customer_id"] == 5
+
+
+def test_purchased_tracks_with_catalog_recommendation_routes_to_both_agents():
+    calls = []
+    graph = build_offline_graph(calls)
+    thread_config = config("purchased-tracks-and-recommendation")
+    request = "Which songs did I buy? Also recommend jazz albums."
+
+    graph.invoke(
+        {"messages": [HumanMessage(content=request)]},
+        config=thread_config,
+    )
+    state = graph.invoke(Command(resume="5"), config=thread_config)
+
+    assert [call[0] for call in calls] == ["invoice", "music"]
+    assert all(call[1] == request for call in calls)
+    assert "Your purchases:" in state["messages"][-1].content
+    assert "Music catalog:" in state["messages"][-1].content
+
+
 def test_mixed_request_calls_invoice_first_and_music_second():
     calls = []
     graph = build_offline_graph(calls)
@@ -115,6 +155,64 @@ def test_invalid_id_cannot_trigger_invoice_agent():
     state = graph.invoke({"messages": [HumanMessage(content="My customer ID is 99999")]}, config=config("invalid"))
     assert not state.get("verified")
     assert not calls
+
+
+def test_formatted_phone_can_start_verification_and_resume():
+    calls = []
+    graph = build_offline_graph(calls)
+    thread_config = config("formatted-phone")
+
+    state = graph.invoke(
+        {"messages": [HumanMessage(content="Show my invoices")]},
+        config=thread_config,
+    )
+
+    assert not state.get("verified")
+    snapshot = graph.get_state(thread_config)
+    assert snapshot.next == ("human_input",)
+    assert "Customer ID, email address, or phone number" in (
+        snapshot.tasks[0].interrupts[0].value
+    )
+
+    state = graph.invoke(
+        Command(resume="+55 (12) 3923-5555"),
+        config=thread_config,
+    )
+
+    assert state["verified"] is True
+    assert state["customer_id"] == 1
+    assert calls[0][0] == "invoice"
+    assert calls[0][2]["configurable"]["verified_customer_id"] == 1
+
+
+def test_unknown_id_in_existing_checkpoint_does_not_reuse_previous_customer():
+    calls = []
+    graph = build_offline_graph(calls)
+    thread_config = config("stale-verified-customer")
+    graph.update_state(
+        thread_config,
+        {
+            "customer_id": 12,
+            "verified": True,
+            "messages": [
+                AIMessage(
+                    content="Account lookup successful for customer ID 12."
+                )
+            ],
+        },
+    )
+
+    state = graph.invoke(
+        {"messages": [HumanMessage(content="My ID is 99999")]},
+        config=thread_config,
+    )
+
+    assert state["verified"] is False
+    assert state["customer_id"] == 12
+    assert calls == []
+    snapshot = graph.get_state(thread_config)
+    assert snapshot.next == ("human_input",)
+    assert "couldn't find an account" in snapshot.tasks[0].interrupts[0].value
 
 
 def test_genre_count_is_tracks_not_distinct_artists():

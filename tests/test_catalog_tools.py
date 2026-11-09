@@ -146,6 +146,21 @@ def test_check_for_songs_not_found() -> None:
     assert "No songs found" in result["message"]
 
 
+@pytest.mark.parametrize("wildcard", ["%", "_"])
+def test_check_for_songs_escapes_like_wildcards(wildcard: str) -> None:
+    result = invoke(check_for_songs, title=wildcard)
+
+    if wildcard == "%":
+        total_tracks = json.loads(
+            execute_query("SELECT COUNT(*) AS count FROM Track")
+        )[0]["count"]
+        assert result["tracks"]
+        assert all("%" in track["title"] for track in result["tracks"])
+        assert result["total_count"] < total_tracks
+    else:
+        assert "No songs found" in result["message"]
+
+
 def test_get_track_details_found() -> None:
     result = invoke(get_track_details, track_id="1")
 
@@ -171,10 +186,12 @@ def test_get_track_details_not_found() -> None:
 
 def test_get_invoices_by_customer_found_and_sorted_newest_first() -> None:
     invoices = invoke(get_invoices_by_customer_sorted_by_date, customer_id="1")
-    dates = [invoice["invoice_date"] for invoice in invoices]
+    sort_keys = [
+        (invoice["invoice_date"], invoice["invoice_id"]) for invoice in invoices
+    ]
 
     assert invoices
-    assert dates == sorted(dates, reverse=True)
+    assert sort_keys == sorted(sort_keys, reverse=True)
 
 
 def test_get_invoices_by_customer_not_found() -> None:
@@ -233,13 +250,19 @@ def test_get_employee_by_invoice_and_customer_found() -> None:
 
 
 def test_get_employee_by_invoice_and_customer_hides_foreign_invoice() -> None:
-    result = invoke(
+    foreign_result = invoke(
         get_employee_by_invoice_and_customer,
         invoice_id="1",
         customer_id="1",
     )
+    missing_result = invoke(
+        get_employee_by_invoice_and_customer,
+        invoice_id="2147483647",
+        customer_id="1",
+    )
 
-    assert result["message"] == "Invoice not found for your account"
+    assert foreign_result == missing_result
+    assert foreign_result["message"] == "Invoice not found for your account"
 
 
 @pytest.mark.parametrize(
@@ -267,9 +290,15 @@ def test_get_invoice_line_items_found() -> None:
 
 
 def test_get_invoice_line_items_hides_foreign_invoice() -> None:
-    result = invoke(get_invoice_line_items, invoice_id="1", customer_id="1")
+    foreign_result = invoke(get_invoice_line_items, invoice_id="1", customer_id="1")
+    missing_result = invoke(
+        get_invoice_line_items,
+        invoice_id="2147483647",
+        customer_id="1",
+    )
 
-    assert result["message"] == "Invoice not found for your account"
+    assert foreign_result == missing_result
+    assert foreign_result["message"] == "Invoice not found for your account"
 
 
 @pytest.mark.parametrize(

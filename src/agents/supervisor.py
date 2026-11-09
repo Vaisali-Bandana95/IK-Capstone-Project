@@ -28,6 +28,7 @@ from src.graph.verification import (
     _exhausted_node,
     _human_input_node,
     create_verification_node,
+    extract_phone_identifier,
     route_after_verification,
 )
 
@@ -40,7 +41,8 @@ Route = Literal["music", "invoice", "mixed", "verify", "off_topic"]
 ROUTE_PROMPT = """You are the routing supervisor for a digital music store.
 Classify ONLY the newest customer message. Choose:
 - music: artists, albums, genres, tracks, catalog searches, music preferences
-- invoice: invoices, purchases, orders, account spending, customer representative
+- invoice: invoices, purchase history (including tracks/songs/albums the customer
+  bought or purchased), orders, account spending, customer representative
 - mixed: BOTH invoice/account and music catalog requests (invoice must run first)
 - verify: the customer is supplying an ID, email, or phone for verification
 - off_topic: unrelated subjects (e.g. weather, programming, politics)
@@ -126,7 +128,7 @@ def _obvious_route(text: str) -> Route | None:
     if re.search(r"\b(weather|forecast|temperature outside|stock market|football scores|election results)\b", lower):
         return "off_topic"
     invoice = bool(re.search(
-        r"\b(invoice|invoices|billing|purchase|purchases|bought|spent|spend|"
+        r"\b(invoice|invoices|billing|purchase|purchases|purchased|buy|buys|bought|buying|spent|spend|"
         r"payment|receipt|receipts|support rep|support representative|my orders?)\b",
         lower,
     ))
@@ -136,6 +138,18 @@ def _obvious_route(text: str) -> Route | None:
         r"favourite|favorite|band|ac/dc|classical|pop)\b",
         lower,
     ))
+    purchase_history = bool(
+        re.search(r"\b(?:purchases?|purchased|buy|buys|bought|buying|orders?)\b", lower)
+    )
+    separate_catalog_request = bool(
+        re.search(
+            r"\b(?:catalog|recommend(?:ation)?s?|available|you have|you offer|"
+            r"browse|search for|find me)\b",
+            lower,
+        )
+    )
+    if invoice and music and purchase_history and not separate_catalog_request:
+        return "invoice"
     if invoice and music:
         return "mixed"
     if invoice:
@@ -145,6 +159,10 @@ def _obvious_route(text: str) -> Route | None:
     # Handle stand-alone identifiers without requiring an LLM call.
     if re.fullmatch(r"\d{1,15}", lower) or re.search(
         r"\b(my )?(customer )?id\s*(is|:|=)|\bmy (email|phone)\b|@", lower
+    ):
+        return "verify"
+    if extract_phone_identifier(text) or re.search(
+        r"\b(phone|mobile|telephone|cell)(?:\s+number)?\b", lower
     ):
         return "verify"
     if lower.startswith(("i love ", "i really love ", "i prefer ", "i like ")):

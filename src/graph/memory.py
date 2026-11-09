@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import re
 import sqlite3
 import threading
 from pathlib import Path
@@ -101,9 +102,39 @@ def _conversation_excerpt(messages: list[BaseMessage]) -> str:
     lines = []
     for message in customer_messages:
         content = message.content
-        if isinstance(content, str) and content.strip():
+        if isinstance(content, str) and _is_explicit_positive_preference(content):
             lines.append(f"Customer: {content.strip()}")
     return "\n".join(lines)
+
+
+def _is_explicit_positive_preference(message: str) -> bool:
+    text = message.strip()
+    if not text or "?" in text:
+        return False
+    if re.search(
+        r"\b(?:not|never|no|don't|doesn't|didn't|dislike|hate|"
+        r"if|would|could|might|suppose|hypothetical)\b",
+        text,
+        re.IGNORECASE,
+    ):
+        return False
+    if re.search(
+        r"\b(?:friend|wife|husband|partner|mother|father|brother|sister|"
+        r"son|daughter|colleague|coworker|someone else|other people)\b",
+        text,
+        re.IGNORECASE,
+    ):
+        return False
+    return bool(
+        re.match(
+            r"^(?:i\s+(?:(?:really|absolutely|particularly)\s+)?"
+            r"(?:love|like|prefer|enjoy|adore|am\s+a\s+fan\s+of)\b|"
+            r"my\s+(?:favorite|favourite)\b|"
+            r"[\w'&./ -]+\s+is\s+my\s+(?:favorite|favourite)\b)",
+            text,
+            re.IGNORECASE,
+        )
+    )
 
 
 def _preference_extractor(model=None):

@@ -1,5 +1,6 @@
 from typing import Any
 
+import pytest
 from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
 from langgraph.store.memory import InMemoryStore
 
@@ -146,8 +147,41 @@ def test_question_about_jazz_does_not_save_a_preference() -> None:
         store=store,
     )
 
-    assert model.calls == 1
+    assert model.calls == 0
     assert store.get((MEMORY_NAMESPACE, "5"), MEMORY_KEY) is None
+
+
+@pytest.mark.parametrize(
+    "statement",
+    [
+        "I don't like jazz.",
+        "If I liked metal, what would you recommend?",
+        "My friend loves blues.",
+        "Show me some jazz.",
+        "Would I like rock?",
+    ],
+)
+def test_non_preference_messages_are_filtered_before_extraction(
+    statement: str,
+) -> None:
+    store = InMemoryStore()
+    store.put(
+        (MEMORY_NAMESPACE, "5"),
+        MEMORY_KEY,
+        {"customer_id": 5, "music_preferences": ["classical"]},
+    )
+    model = ExplicitJazzExtractor()
+    create_node = create_memory_node(model)
+
+    result = create_node(
+        state_for(5, HumanMessage(content=statement)),
+        store=store,
+    )
+
+    saved = store.get((MEMORY_NAMESPACE, "5"), MEMORY_KEY)
+    assert model.calls == 0
+    assert saved.value["music_preferences"] == ["classical"]
+    assert result == {}
 
 
 def test_no_new_preferences_skips_write_and_preserves_existing_profile() -> None:
@@ -167,7 +201,7 @@ def test_no_new_preferences_skips_write_and_preserves_existing_profile() -> None
     )
 
     after = store.get((MEMORY_NAMESPACE, "5"), MEMORY_KEY).value
-    assert model.calls == 1
+    assert model.calls == 0
     assert before == after
     assert result == {}
 
@@ -206,7 +240,8 @@ def test_memory_extraction_uses_recent_messages_and_not_system_or_tool_content()
     create_node = create_memory_node(model)
     messages = [SystemMessage(content="verified ID information must not be extracted")]
     messages.extend(
-        HumanMessage(content=f"Earlier message {index}") for index in range(12)
+        HumanMessage(content=f"I like metal, earlier message {index}")
+        for index in range(12)
     )
     messages.extend(
         [
@@ -222,7 +257,7 @@ def test_memory_extraction_uses_recent_messages_and_not_system_or_tool_content()
 
     excerpt = model.messages[-1].content
     assert "Earlier message 2" not in excerpt
-    assert "Earlier message 11" in excerpt
+    assert "earlier message 11" in excerpt
     assert "Tool result" not in excerpt
     assert "verified ID information" not in excerpt
     assert "I prefer jazz." in excerpt

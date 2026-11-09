@@ -1,6 +1,7 @@
 import json
 import re
-from typing import Annotated, Any, Callable, Literal, TypedDict
+from collections.abc import Callable
+from typing import Annotated, Any, Literal, TypedDict
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 from langchain_core.runnables import Runnable
@@ -23,6 +24,18 @@ identifier. If the message contains no such identifier, return an empty identifi
 VERIFICATION_FALLBACK_PROMPT = (
     "I couldn't verify your account. Please try again with your Customer ID, "
     "email address, or phone number."
+)
+ACCOUNT_NOT_FOUND_PROMPT = (
+    "I couldn't find an account matching that identifier. Please try a different "
+    "Customer ID, email address, or phone number."
+)
+ACCOUNT_SWITCH_PROMPT = (
+    "This conversation is already associated with a different account. Start a "
+    "new conversation to verify another account."
+)
+AMBIGUOUS_IDENTIFIER_PROMPT = (
+    "I found multiple identifiers in that message. Please send one Customer ID, "
+    "email address, or phone number at a time."
 )
 
 
@@ -64,6 +77,78 @@ def _latest_human_message(state: VerificationState) -> str:
         if isinstance(message, HumanMessage):
             return str(message.content)
     return ""
+
+
+def extract_phone_identifier(message: str) -> str | None:
+    phone = re.search(
+        r"\b(?:phone|mobile|telephone|cell)(?:\s+number)?\s*"
+        r"(?:is|[:=])?\s*(\+?\d[\d\s().-]*\d)",
+        message,
+        re.IGNORECASE,
+    )
+    if phone:
+        candidate = phone.group(1).strip()
+        if 7 <= len(normalize_phone(candidate).removeprefix("+")) <= 15:
+            return candidate
+
+    if re.fullmatch(r"\s*\+?\d[\d\s().-]*\d\s*", message):
+        candidate = message.strip()
+        if 7 <= len(normalize_phone(candidate).removeprefix("+")) <= 15:
+            return candidate
+    return None
+
+
+def _extract_identifier(message: str, extractor: Runnable) -> str:
+    explicit_customer_id = re.search(
+        r"\b(?:my\s+)?(?:customer\s+)?id\s*(?:is|[:=])?\s*([0-9]+)\b",
+        message,
+        re.IGNORECASE,
+    )
+    if explicit_customer_id:
+        return explicit_customer_id.group(1)
+
+    if re.fullmatch(r"\s*[0-9]+\s*", message):
+        return message.strip()
+
+    email = re.search(r"[^@\s]+@[^@\s]+\.[^@\s]+", message)
+    if email:
+        return email.group()
+
+    phone = extract_phone_identifier(message)
+    if phone:
+        return phone
+
+    extracted = extractor.invoke(
+        [
+            SystemMessage(content=IDENTIFIER_EXTRACTION_PROMPT),
+            HumanMessage(content=message),
+        ]
+    )
+    return extracted.identifier.strip()
+
+
+def _contains_multiple_identifiers(message: str) -> bool:
+    candidates: set[tuple[str, str]] = set()
+    customer_ids = re.findall(
+        r"\b(?:my\s+)?(?:customer\s+)?id\s*(?:is|[:=])?\s*([0-9]+)\b",
+        message,
+        re.IGNORECASE,
+    )
+    candidates.update(("customer_id", value) for value in customer_ids)
+    if (
+        not customer_ids
+        and re.fullmatch(r"\s*[0-9]+\s*", message)
+        and len(message.strip()) <= 10
+    ):
+        candidates.add(("customer_id", message.strip()))
+    candidates.update(
+        ("email", email.casefold())
+        for email in re.findall(r"[^@\s]+@[^@\s]+\.[^@\s]+", message)
+    )
+    phone = extract_phone_identifier(message)
+    if phone:
+        candidates.add(("phone", normalize_phone(phone).removeprefix("+")))
+    return len(candidates) > 1
 
 
 def _classify_identifier(identifier: str) -> Literal["customer_id", "email", "phone"] | None:
@@ -119,12 +204,32 @@ def _lookup_phone(phone: str) -> int | None:
         """,
         {},
     )
-    for row in phone_rows:
-        stored_comparable = normalize_phone(row["Phone"]).removeprefix("+")
-        if not stored_comparable:
-            continue
-        if comparable == stored_comparable:
-            return int(row["CustomerId"])
+    normalized_rows = [
+        (
+            int(row["CustomerId"]),
+            normalize_phone(row["Phone"]).removeprefix("+"),
+        )
+        for row in phone_rows
+    ]
+    exact_matches = [
+        customer_id
+        for customer_id, stored_phone in normalized_rows
+        if stored_phone and comparable == stored_phone
+    ]
+    if len(exact_matches) == 1:
+        return exact_matches[0]
+    if exact_matches:
+        return None
+
+    if len(comparable) >= 10:
+        last_ten_matches = [
+            customer_id
+            for customer_id, stored_phone in normalized_rows
+            if len(stored_phone) >= 10
+            and comparable[-10:] == stored_phone[-10:]
+        ]
+        if len(last_ten_matches) == 1:
+            return last_ten_matches[0]
     return None
 
 
@@ -161,10 +266,13 @@ def _lookup_customer(identifier: str) -> int | None:
     return _lookup_phone(candidate)
 
 
-def _failed_verification(state: VerificationState) -> dict[str, Any]:
+def _failed_verification(
+    state: VerificationState,
+    message: str = VERIFICATION_FALLBACK_PROMPT,
+) -> dict[str, Any]:
     return {
         "verified": False,
-        "verification_error": "Customer could not be verified",
+        "verification_error": message,
         "retry_count": state.get("retry_count", 0) + 1,
     }
 
@@ -173,22 +281,21 @@ def create_verification_node(llm: Any | None = None) -> Callable:
     extractor = _make_extractor(llm)
 
     def verification_node(state: VerificationState) -> dict[str, Any]:
-        if state.get("customer_id") is not None:
-            return {"verified": True}
-
         message = _latest_human_message(state)
-        extracted = extractor.invoke(
-            [
-                SystemMessage(content=IDENTIFIER_EXTRACTION_PROMPT),
-                HumanMessage(content=message),
-            ]
-        )
-        identifier = extracted.identifier.strip()
+        if _contains_multiple_identifiers(message):
+            return _failed_verification(state, AMBIGUOUS_IDENTIFIER_PROMPT)
+        identifier = _extract_identifier(message, extractor)
         if not identifier or not _identifier_was_provided(identifier, message):
             return _failed_verification(state)
         customer_id = _lookup_customer(identifier) if identifier else None
         if customer_id is None:
-            return _failed_verification(state)
+            return _failed_verification(state, ACCOUNT_NOT_FOUND_PROMPT)
+        existing_customer_id = state.get("customer_id")
+        if (
+            existing_customer_id is not None
+            and customer_id != existing_customer_id
+        ):
+            return _failed_verification(state, ACCOUNT_SWITCH_PROMPT)
 
         return {
             "customer_id": customer_id,
@@ -220,7 +327,9 @@ def route_after_verification(
 
 
 def _human_input_node(state: VerificationState) -> dict[str, list[HumanMessage]]:
-    response = interrupt(VERIFICATION_FALLBACK_PROMPT)
+    response = interrupt(
+        state.get("verification_error") or VERIFICATION_FALLBACK_PROMPT
+    )
     return {"messages": [HumanMessage(content=str(response))]}
 
 
