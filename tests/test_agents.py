@@ -16,7 +16,11 @@ from src.agents.prompts import (
     MUSIC_AGENT_PROMPT,
     SUPERVISOR_PROMPT,
 )
-from src.agents.supervisor import build_supervisor, build_support_graph
+from src.agents.supervisor import (
+    _specialist_result,
+    build_supervisor,
+    build_support_graph,
+)
 from src.graph import UserInput
 from src.graph.memory import MEMORY_KEY, MEMORY_NAMESPACE, UserProfile
 
@@ -357,6 +361,55 @@ def test_supervisor_runs_mixed_request_invoice_then_music() -> None:
     )
 
     assert calls == ["invoice_agent", "music_agent"]
+
+
+def test_specialist_answer_without_tool_result_is_rejected() -> None:
+    class UnsupportedAnswerAgent:
+        def invoke(self, input, config=None):
+            return {
+                "messages": [
+                    AIMessage(content="The album was released in 1980.")
+                ]
+            }
+
+    response = _specialist_result(
+        UnsupportedAnswerAgent(),
+        {
+            "messages": [HumanMessage(content="When was this album released?")],
+            "current_request": "When was this album released?",
+        },
+        {},
+        invoice=False,
+    )
+
+    assert "I won't guess" in response
+    assert "catalog or account data" in response
+
+
+def test_specialist_answer_after_tool_error_is_rejected() -> None:
+    class ToolErrorAgent:
+        def invoke(self, input, config=None):
+            return {
+                "messages": [
+                    ToolMessage(
+                        content='{"error":"query failed","code":"QUERY_ERROR"}',
+                        tool_call_id="failed-tool",
+                    ),
+                    AIMessage(content="There are 10,000 albums."),
+                ]
+            }
+
+    response = _specialist_result(
+        ToolErrorAgent(),
+        {
+            "messages": [HumanMessage(content="How many albums are there?")],
+            "current_request": "How many albums are there?",
+        },
+        {},
+        invoice=False,
+    )
+
+    assert "I won't guess" in response
 
 
 def test_invoice_agent_uses_four_customer_scoped_tools() -> None:

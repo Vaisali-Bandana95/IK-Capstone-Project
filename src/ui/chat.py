@@ -395,6 +395,30 @@ def _latest_assistant_response(state: dict[str, Any]) -> str:
     return ""
 
 
+def _user_facing_error(error: Exception) -> str:
+    error_name = type(error).__name__
+    if isinstance(error, TimeoutError) or error_name in {
+        "APITimeoutError",
+        "ConnectTimeout",
+        "ReadTimeout",
+    }:
+        return "The request timed out. Please try again in a moment."
+    if isinstance(error, ConnectionError) or error_name in {
+        "APIConnectionError",
+        "ConnectError",
+    }:
+        return (
+            "The support service could not be reached. Check your connection "
+            "and try again."
+        )
+    if error_name == "RateLimitError":
+        return "The support service is busy. Please wait a moment, then try again."
+    return (
+        "I couldn't complete your request. Please try again. If this keeps "
+        "happening, start a new conversation or contact support."
+    )
+
+
 def respond(
     message: str,
     history: list[dict[str, str]] | None,
@@ -489,12 +513,12 @@ def respond(
         chat_history.append(
             {
                 "role": "assistant",
-                "content": "Sorry, something went wrong. Please try again.",
+                "content": _user_facing_error(error),
             }
         )
         yield (
             chat_history,
-            "❌ Error — please try again.",
+            "❌ Request failed. Please try again.",
             gr.update(interactive=True),
             session_id,
             gr.update(interactive=True),

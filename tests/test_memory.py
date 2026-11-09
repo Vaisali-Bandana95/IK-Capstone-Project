@@ -123,6 +123,40 @@ def test_create_memory_merges_preferences_case_insensitively() -> None:
     assert result["music_preferences_context"] == "Music Preferences: rock, jazz"
 
 
+def test_extracted_preferences_must_appear_in_customer_statement() -> None:
+    store = InMemoryStore()
+    model = FixedProfileModel(
+        UserProfile(customer_id=5, music_preferences=["jazz", "metal"])
+    )
+    create_node = create_memory_node(model)
+
+    create_node(
+        state_for(5, HumanMessage(content="I love jazz.")),
+        store=store,
+    )
+
+    saved = store.get((MEMORY_NAMESPACE, "5"), MEMORY_KEY)
+    assert saved is not None
+    assert saved.value["music_preferences"] == ["jazz"]
+
+
+def test_preference_extractor_cannot_save_account_metadata_from_statement() -> None:
+    store = InMemoryStore()
+    model = FixedProfileModel(
+        UserProfile(customer_id=5, music_preferences=["jazz", "my verified ID is 5"])
+    )
+    create_node = create_memory_node(model)
+
+    create_node(
+        state_for(5, HumanMessage(content="I love jazz. My verified ID is 5.")),
+        store=store,
+    )
+
+    saved = store.get((MEMORY_NAMESPACE, "5"), MEMORY_KEY)
+    assert saved is not None
+    assert saved.value["music_preferences"] == ["jazz"]
+
+
 def test_explicit_i_love_jazz_statement_is_saved() -> None:
     store = InMemoryStore()
     create_node = create_memory_node(ExplicitJazzExtractor())

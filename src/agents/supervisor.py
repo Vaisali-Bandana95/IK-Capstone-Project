@@ -4,12 +4,19 @@ The outer supervisor selects explicit conditional graph branches. The specialist
 can never be called for off-topic requests; mixed requests run invoice first,
 then catalog. Verified identity comes solely from trusted graph state.
 """
+import json
 import logging
 import re
 import time
 from typing import Annotated, Any, Literal
 
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
+from langchain_core.messages import (
+    AIMessage,
+    BaseMessage,
+    HumanMessage,
+    SystemMessage,
+    ToolMessage,
+)
 from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
@@ -129,7 +136,11 @@ def _obvious_route(text: str) -> Route | None:
     if not lower:
         return "off_topic"
     # Explicitly block typical unrelated topics without running a specialist.
-    if re.search(r"\b(weather|forecast|temperature outside|stock market|football scores|election results)\b", lower):
+    if re.search(
+        r"\b(weather|forecast|temperature outside|stock market|football scores|"
+        r"election results)\b",
+        lower,
+    ):
         return "off_topic"
     invoice = bool(re.search(
         r"\b(invoice|invoices|billing|purchase|purchases|purchased|buy|buys|bought|buying|spent|spend|"
@@ -167,7 +178,7 @@ def _obvious_route(text: str) -> Route | None:
     separate_catalog_request = bool(
         re.search(
             r"\b(?:catalog|recommend(?:ation)?s?|available|you have|you offer|"
-            r"browse|search for|find me)\b",
+            r"browse|search for|find(?: me)?)\b",
             lower,
         )
     )
@@ -288,6 +299,21 @@ def _verified_reply_node(state: SupportState) -> dict[str, Any]:
     ))]}
 
 
+def _has_usable_tool_result(messages: list[BaseMessage]) -> bool:
+    for message in messages:
+        if not isinstance(message, ToolMessage) or not isinstance(message.content, str):
+            continue
+        try:
+            result = json.loads(message.content)
+        except json.JSONDecodeError:
+            continue
+        if result is not None and not (
+            isinstance(result, dict) and "error" in result
+        ):
+            return True
+    return False
+
+
 def _specialist_result(agent, state: SupportState, config: RunnableConfig,
                        *, invoice: bool) -> str:
     if invoice and (not state.get("verified") or state.get("customer_id") is None):
@@ -321,6 +347,19 @@ def _specialist_result(agent, state: SupportState, config: RunnableConfig,
             duration_ms=round((time.perf_counter() - start_time) * 1000, 2),
         )
         raise
+    if not _has_usable_tool_result(result.get("messages", [])):
+        log_event(
+            logger,
+            "agent.unverified_response_rejected",
+            level=logging.WARNING,
+            route=specialist,
+            outcome="missing_tool_result",
+            duration_ms=round((time.perf_counter() - start_time) * 1000, 2),
+        )
+        return (
+            "I couldn't verify a response against the current catalog or account "
+            "data, so I won't guess. Please rephrase your request and try again."
+        )
     for message in reversed(result.get("messages", [])):
         if (
             isinstance(message, AIMessage)

@@ -57,6 +57,14 @@ See [DEPLOYMENT_AND_TESTING.md](DEPLOYMENT_AND_TESTING.md) for precise commands,
 
 Most test cases use deterministic fake models, so no real LLM usage is required. Integration tests need the public Chinook SQL dataset on first execution. GitHub Actions CI (`.github/workflows/ci.yaml`) installs the pinned dependencies, runs tests, and builds the image.
 
+The offline routing evaluation set covers varied catalog, invoice, mixed,
+verification, and off-topic phrasing, including purchase questions that also
+ask for catalog information. Specialist responses without a tool result are
+rejected rather than presented as facts. Extracted preferences are saved only
+when their text is present in an explicit positive customer statement. UI
+failures provide safe retry or recovery guidance without exposing exception
+details.
+
 ## Expected scenarios
 
 1. Ask to see invoices -> app prompts for sample customer ID/email/phone -> a correct match permits the account-scoped invoice specialist.

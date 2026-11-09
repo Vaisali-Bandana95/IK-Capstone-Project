@@ -1,10 +1,16 @@
 from types import SimpleNamespace
 from typing import Any
 
+import pytest
 from langchain_core.messages import AIMessage
 from langgraph.types import Command
 
-from src.ui.chat import create_demo, reset_conversation, respond
+from src.ui.chat import (
+    _user_facing_error,
+    create_demo,
+    reset_conversation,
+    respond,
+)
 
 
 class FakeGraph:
@@ -99,6 +105,51 @@ def test_each_chat_session_uses_its_own_thread_id() -> None:
     assert [
         config["configurable"]["thread_id"] for _, config in graph.inputs
     ] == ["session-one", "session-two"]
+
+
+def test_ui_displays_actionable_timeout_message_without_exception_details() -> None:
+    class TimedOutGraph(FakeGraph):
+        def get_state(self, config):
+            raise TimeoutError("internal provider details")
+
+    updates = list(respond("Show my invoices", [], "timeout-thread", TimedOutGraph()))
+
+    response = updates[-1][0][-1]["content"]
+    assert "timed out" in response
+    assert "try again in a moment" in response
+    assert "internal provider details" not in response
+
+
+def test_ui_displays_safe_recovery_steps_for_unknown_errors() -> None:
+    class BrokenGraph(FakeGraph):
+        def get_state(self, config):
+            raise RuntimeError("internal stack trace")
+
+    updates = list(respond("Show my invoices", [], "error-thread", BrokenGraph()))
+
+    response = updates[-1][0][-1]["content"]
+    assert "start a new conversation or contact support" in response
+    assert "internal stack trace" not in response
+
+
+@pytest.mark.parametrize(
+    ("error", "expected"),
+    [
+        (ConnectionError("private connection details"), "could not be reached"),
+        (
+            type("RateLimitError", (Exception,), {})("private quota details"),
+            "service is busy",
+        ),
+    ],
+)
+def test_ui_error_categories_give_safe_recovery_guidance(
+    error: Exception,
+    expected: str,
+) -> None:
+    message = _user_facing_error(error)
+
+    assert expected in message
+    assert "private" not in message
 
 
 def test_reset_clears_chat_and_creates_a_new_thread_id() -> None:

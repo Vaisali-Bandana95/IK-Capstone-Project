@@ -108,6 +108,39 @@ def _conversation_excerpt(messages: list[BaseMessage]) -> str:
     return "\n".join(lines)
 
 
+def _preference_source_text(message: str) -> str:
+    text = message.strip()
+    if not _is_explicit_positive_preference(text):
+        return ""
+    return re.split(r"[.!?;\n]", text, maxsplit=1)[0].strip()
+
+
+def _is_grounded_preference(preference: str, excerpt: str) -> bool:
+    candidate_tokens = re.findall(r"[a-z0-9]+", preference.casefold())
+    if not candidate_tokens:
+        return False
+    forbidden_tokens = {
+        "account",
+        "customer",
+        "email",
+        "id",
+        "phone",
+        "verified",
+    }
+    if forbidden_tokens.intersection(candidate_tokens):
+        return False
+
+    candidate = " ".join(candidate_tokens)
+    for line in excerpt.splitlines():
+        _, _, source = line.partition(":")
+        source = _preference_source_text(source)
+        source_tokens = re.findall(r"[a-z0-9]+", source.casefold())
+        normalized_source = " ".join(source_tokens)
+        if re.search(rf"(?<!\w){re.escape(candidate)}(?!\w)", normalized_source):
+            return True
+    return False
+
+
 def _is_explicit_positive_preference(message: str) -> bool:
     text = message.strip()
     if not text or "?" in text:
@@ -206,6 +239,7 @@ def create_memory_node(model=None):
             preference.strip()
             for preference in profile.music_preferences
             if preference.strip()
+            and _is_grounded_preference(preference.strip(), excerpt)
         ]
         if not new_preferences:
             return {}

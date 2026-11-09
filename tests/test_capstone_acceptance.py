@@ -5,7 +5,7 @@ No live LLM credentials are required. The real SQL fixture comes from conftest.
 import json
 from pathlib import Path
 
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.store.memory import InMemoryStore
 from langgraph.types import Command
@@ -48,7 +48,16 @@ class RecordingAgent:
     def invoke(self, input, config=None):
         query = input["messages"][-1].content
         self.calls.append((self.name, query, config))
-        return {"messages": [AIMessage(content=f"{self.name} grounded result")]}
+        return {
+            "messages": [
+                ToolMessage(
+                    content='{"result":"grounded test fixture"}',
+                    tool_call_id=f"{self.name}-tool-result",
+                    name=f"{self.name}_test_tool",
+                ),
+                AIMessage(content=f"{self.name} grounded result"),
+            ]
+        }
 
 
 def build_offline_graph(calls, store=None):
