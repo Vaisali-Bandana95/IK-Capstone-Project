@@ -4,7 +4,9 @@ The outer supervisor selects explicit conditional graph branches. The specialist
 can never be called for off-topic requests; mixed requests run invoice first,
 then catalog. Verified identity comes solely from trusted graph state.
 """
+import logging
 import re
+import time
 from typing import Annotated, Any, Literal
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
@@ -17,6 +19,7 @@ from langgraph_supervisor import create_supervisor
 from pydantic import BaseModel, Field
 
 from src.config import settings
+from src.config.logging import log_event
 from src.graph.memory import (
     create_memory_node,
     create_memory_store,
@@ -37,6 +40,7 @@ from .music_agent import build_music_agent
 from .prompts import SUPERVISOR_PROMPT
 
 Route = Literal["music", "invoice", "mixed", "verify", "off_topic"]
+logger = logging.getLogger(__name__)
 
 ROUTE_PROMPT = """You are the routing supervisor for a digital music store.
 Classify ONLY the newest customer message. Choose:
@@ -141,6 +145,25 @@ def _obvious_route(text: str) -> Route | None:
     purchase_history = bool(
         re.search(r"\b(?:purchases?|purchased|buy|buys|bought|buying|orders?)\b", lower)
     )
+    catalog_fact_request = bool(
+        re.search(r"\b(?:genre|release date|duration|tempo|composer|media type)\b", lower)
+    )
+    explicit_purchase_list = bool(
+        re.search(
+            r"\b(?:what|which)\s+(?:tracks?|songs?|albums?)\s+"
+            r"(?:have i|did i)\s+(?:ever\s+)?(?:purchased|bought|buy)\b|"
+            r"\b(?:show|list|display|view)\s+(?:me\s+)?(?:my\s+)?"
+            r"(?:purchases?|orders?)\b",
+            lower,
+        )
+    )
+    explicit_account_request = bool(
+        re.search(
+            r"\b(?:invoice|invoices|billing|spent|spend|payment|receipt|"
+            r"receipts|support rep|support representative)\b",
+            lower,
+        )
+    )
     separate_catalog_request = bool(
         re.search(
             r"\b(?:catalog|recommend(?:ation)?s?|available|you have|you offer|"
@@ -148,6 +171,11 @@ def _obvious_route(text: str) -> Route | None:
             lower,
         )
     )
+    if invoice and music and catalog_fact_request:
+        if explicit_purchase_list:
+            return "mixed"
+        if not explicit_account_request:
+            return "music"
     if invoice and music and purchase_history and not separate_catalog_request:
         return "invoice"
     if invoice and music:
@@ -178,20 +206,31 @@ def _make_route_node(model=None):
         except (AttributeError, NotImplementedError):
             pass
 
-    def route_node(state: SupportState) -> dict[str, Route]:
+    def route_node(
+        state: SupportState,
+        config: RunnableConfig,
+    ) -> dict[str, Any]:
         latest = _latest_customer_text(state)
         deterministic = _obvious_route(latest)
         # Explicit matches are deterministic, and off-topic requests never get
         # handed to music or invoice agents.
         if deterministic is not None:
-            return {"route": deterministic, "current_request": latest}
-        if classifier is not None:
+            route = deterministic
+        elif classifier is not None:
             decision = classifier.invoke([
                 SystemMessage(content=ROUTE_PROMPT),
                 HumanMessage(content=latest),
             ])
-            return {"route": decision.intent, "current_request": latest}
-        return {"route": "off_topic", "current_request": latest}
+            route = decision.intent
+        else:
+            route = "off_topic"
+        log_event(
+            logger,
+            "routing.decision",
+            route=route,
+            outcome="deterministic" if deterministic is not None else "classified",
+        )
+        return {"route": route, "current_request": latest}
     return route_node
 
 
@@ -253,6 +292,9 @@ def _specialist_result(agent, state: SupportState, config: RunnableConfig,
                        *, invoice: bool) -> str:
     if invoice and (not state.get("verified") or state.get("customer_id") is None):
         raise ValueError("Invoice agent requires verified identity")
+    specialist = "invoice" if invoice else "music"
+    start_time = time.perf_counter()
+    log_event(logger, "agent.started", route=specialist)
     # Only the current question and stored catalog preferences go to specialists.
     # Previous free-text IDs cannot override trusted config values.
     messages: list[BaseMessage] = [HumanMessage(
@@ -266,7 +308,19 @@ def _specialist_result(agent, state: SupportState, config: RunnableConfig,
     child_config = {**config, "configurable": dict(config.get("configurable", {}))}
     if invoice:
         child_config["configurable"]["verified_customer_id"] = state["customer_id"]
-    result = agent.invoke({"messages": messages}, config=child_config)
+    try:
+        result = agent.invoke({"messages": messages}, config=child_config)
+    except Exception as error:
+        log_event(
+            logger,
+            "agent.failed",
+            level=logging.ERROR,
+            route=specialist,
+            error_type=type(error).__name__,
+            outcome="error",
+            duration_ms=round((time.perf_counter() - start_time) * 1000, 2),
+        )
+        raise
     for message in reversed(result.get("messages", [])):
         if (
             isinstance(message, AIMessage)
@@ -274,7 +328,21 @@ def _specialist_result(agent, state: SupportState, config: RunnableConfig,
             and isinstance(message.content, str)
             and message.content.strip()
         ):
+            log_event(
+                logger,
+                "agent.completed",
+                route=specialist,
+                outcome="success",
+                duration_ms=round((time.perf_counter() - start_time) * 1000, 2),
+            )
             return message.content.strip()
+    log_event(
+        logger,
+        "agent.completed",
+        route=specialist,
+        outcome="empty",
+        duration_ms=round((time.perf_counter() - start_time) * 1000, 2),
+    )
     return "The specialist could not return an answer. Please try again."
 
 

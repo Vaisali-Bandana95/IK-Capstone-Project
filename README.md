@@ -1,6 +1,6 @@
 # Chinook Music Support — Capstone patch
 
-A Gradio chat for the Chinook digital music database. A LangGraph supervisor classifies incoming requests and routes them to scoped catalog and invoice agents using explicit conditional graph edges. Ten SQLAlchemy tools cover catalog searches (including complete track lists by album) and invoice lookups.
+A Gradio chat for the Chinook digital music database. A LangGraph supervisor classifies incoming requests and routes them to scoped catalog and invoice agents using explicit conditional graph edges. All 10 SQLAlchemy tools (6 catalog and 4 invoice) cover catalog searches, including complete track lists by album, and invoice lookups.
 
 > **Important:** Matching a customer ID, email or phone to the demo Chinook database is the capstone's *lookup-based identity gate*, **not** secure authentication. Do not upload real customer records or expose private invoices on the public internet without adding a proper authentication mechanism.
 
@@ -86,6 +86,12 @@ Gradio Blocks UI (session UUID, interrupt/resume handling)
 Music specialist: six LangChain tools -> parameterized Chinook SQL
 Invoice specialist: four LangChain tools -> verified customer ID injected by RunnableConfig
 ```
+
+Application logs are newline-delimited JSON and include a per-chat correlation ID,
+route decisions, specialist lifecycle events, tool names, and database query
+outcomes and row counts. Log fields are allow-listed; user messages, SQL,
+parameters, customer identifiers, and tool result contents are not logged.
+Configure verbosity with `LOG_LEVEL` (default: `INFO`).
 
 The Chinook music catalog is read-only and loaded into an in-memory SQLite
 database at startup. The source SQL is cached separately. Customer preferences

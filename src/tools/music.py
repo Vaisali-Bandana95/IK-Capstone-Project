@@ -4,6 +4,7 @@ from ._utils import (
     encode_json,
     escaped_like,
     fuzzy_search_parameter,
+    log_tool_call,
     not_found,
     query_rows,
     validate_id,
@@ -13,6 +14,7 @@ from ._utils import (
 @tool
 def get_albums_by_artist(artist_name: str) -> str:
     """Find albums by a fuzzy artist-name match."""
+    log_tool_call("get_albums_by_artist")
     rows, error = query_rows(
         """
         SELECT Artist.Name AS artist, Album.Title AS album, Album.AlbumId AS album_id
@@ -42,6 +44,7 @@ def get_albums_by_artist(artist_name: str) -> str:
 @tool
 def get_tracks_by_album(album_title: str) -> str:
     """List every track on an album, including its artist and album title."""
+    log_tool_call("get_tracks_by_album")
     title = album_title.strip()
     if not title:
         return encode_json(
@@ -86,6 +89,7 @@ def get_tracks_by_album(album_title: str) -> str:
 @tool
 def get_tracks_by_artist(artist_name: str) -> str:
     """Find tracks by artist, returning a sample of at most 20 and the total count."""
+    log_tool_call("get_tracks_by_artist")
     matching = {
         "artist": escaped_like(artist_name),
     }
@@ -139,6 +143,7 @@ def get_tracks_by_artist(artist_name: str) -> str:
 @tool
 def get_songs_by_genre(genre: str) -> str:
     """Browse up to 10 deterministic representative songs from a genre, one per artist."""
+    log_tool_call("get_songs_by_genre")
     matching = {"genre": escaped_like(genre)}
     count_rows, error = query_rows(
         """
@@ -207,6 +212,7 @@ def get_songs_by_genre(genre: str) -> str:
 @tool
 def check_for_songs(title: str) -> str:
     """Search track titles using a fuzzy match, returning up to 10 results."""
+    log_tool_call("check_for_songs")
     matching = {"title": escaped_like(title)}
     count_rows, error = query_rows(
         "SELECT COUNT(*) AS total_count FROM Track "
@@ -250,6 +256,7 @@ def check_for_songs(title: str) -> str:
 @tool
 def get_track_details(track_id: str) -> str:
     """Get the complete catalog details for a track ID."""
+    log_tool_call("get_track_details")
     numeric_id, error = validate_id(track_id, "track_id")
     if error:
         return error

@@ -1,11 +1,12 @@
 from langchain_core.tools import tool
 
-from ._utils import encode_json, not_found, query_rows, validate_id
+from ._utils import encode_json, log_tool_call, not_found, query_rows, validate_id
 
 
 @tool
 def get_invoices_by_customer_sorted_by_date(customer_id: str) -> str:
     """List a customer's invoices, newest first, with stable date tie-breaking."""
+    log_tool_call("get_invoices_by_customer_sorted_by_date")
     numeric_id, error = validate_id(customer_id, "customer_id")
     if error:
         return error
@@ -33,6 +34,7 @@ def get_invoices_by_customer_sorted_by_date(customer_id: str) -> str:
 @tool
 def get_tracks_by_price(customer_id: str) -> str:
     """List each track purchased by a customer, most expensive first."""
+    log_tool_call("get_tracks_by_price")
     numeric_id, error = validate_id(customer_id, "customer_id")
     if error:
         return error
@@ -65,6 +67,7 @@ def get_tracks_by_price(customer_id: str) -> str:
 @tool
 def get_employee_by_invoice_and_customer(invoice_id: str, customer_id: str) -> str:
     """Find the support representative for an invoice belonging to the customer."""
+    log_tool_call("get_employee_by_invoice_and_customer")
     numeric_invoice_id, error = validate_id(invoice_id, "invoice_id")
     if error:
         return error
@@ -97,6 +100,7 @@ def get_employee_by_invoice_and_customer(invoice_id: str, customer_id: str) -> s
 @tool
 def get_invoice_line_items(invoice_id: str, customer_id: str) -> str:
     """Get detailed line items for an invoice owned by the specified customer."""
+    log_tool_call("get_invoice_line_items")
     numeric_invoice_id, error = validate_id(invoice_id, "invoice_id")
     if error:
         return error

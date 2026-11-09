@@ -14,6 +14,7 @@ from langgraph.store.memory import InMemoryStore
 from pydantic import BaseModel, Field
 
 from src.config import settings
+from src.config.logging import log_event
 
 MEMORY_NAMESPACE = "memory_profile"
 MEMORY_KEY = "user_memory"
@@ -184,12 +185,21 @@ def create_memory_node(model=None):
                 ]
             )
         except Exception as error:  # noqa: BLE001 - extraction failures must not block replies
-            logger.warning(
-                "Preference extraction failed (%s); continuing without a memory update",
-                type(error).__name__,
+            log_event(
+                logger,
+                "memory.extraction_failed",
+                level=logging.WARNING,
+                error_type=type(error).__name__,
+                outcome="skipped",
             )
             return {}
         if profile.customer_id != customer_id:
+            log_event(
+                logger,
+                "memory.extraction_rejected",
+                level=logging.WARNING,
+                outcome="customer_id_mismatch",
+            )
             return {}
 
         new_preferences = [
@@ -216,6 +226,12 @@ def create_memory_node(model=None):
                     "customer_id": customer_id,
                     "music_preferences": merged,
                 },
+            )
+            log_event(
+                logger,
+                "memory.preferences_updated",
+                preference_count=len(merged),
+                outcome="success",
             )
         return {
             "music_preferences": merged,

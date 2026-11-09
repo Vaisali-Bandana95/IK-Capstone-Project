@@ -120,6 +120,41 @@ def test_purchased_tracks_question_routes_to_invoice_agent():
     assert calls[0][2]["configurable"]["verified_customer_id"] == 5
 
 
+def test_genre_question_about_purchased_track_routes_only_to_catalog():
+    calls = []
+    graph = build_offline_graph(calls)
+    request = 'What is the genre of the song "Stir It Up (Live)" I purchased?'
+    state = graph.invoke(
+        {"messages": [HumanMessage(content=request)]},
+        config=config("purchased-track-genre"),
+    )
+
+    assert len(calls) == 1
+    assert calls[0][0] == "music"
+    assert calls[0][1] == request
+    assert state["route"] == "music"
+    assert not state.get("verified")
+    assert "Music catalog:" not in state["messages"][-1].content
+    assert "Your purchases:" not in state["messages"][-1].content
+
+
+def test_purchase_list_and_genre_question_routes_to_both_specialists():
+    calls = []
+    graph = build_offline_graph(calls)
+    thread_config = config("purchased-tracks-and-genre")
+    request = 'What songs have I purchased, and what genre is "Stir It Up (Live)"?'
+
+    graph.invoke(
+        {"messages": [HumanMessage(content=request)]},
+        config=thread_config,
+    )
+    state = graph.invoke(Command(resume="5"), config=thread_config)
+
+    assert [call[0] for call in calls] == ["invoice", "music"]
+    assert "Your purchases:" in state["messages"][-1].content
+    assert "Music catalog:" in state["messages"][-1].content
+
+
 def test_purchased_tracks_with_catalog_recommendation_routes_to_both_agents():
     calls = []
     graph = build_offline_graph(calls)

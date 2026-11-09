@@ -1,11 +1,18 @@
 import json
+import logging
 import re
 from difflib import SequenceMatcher
 from typing import Any
 
+from src.config.logging import log_event
 from src.db import run_query_safe
 
 MAX_ID = 2_147_483_647
+logger = logging.getLogger(__name__)
+
+
+def log_tool_call(tool_name: str) -> None:
+    log_event(logger, "tool.called", tool=tool_name)
 
 
 def encode_json(value: Any) -> str:

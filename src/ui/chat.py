@@ -9,6 +9,11 @@ from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.types import Command
 
 from src.agents.supervisor import build_support_graph
+from src.config.logging import (
+    log_event,
+    reset_correlation_id,
+    set_correlation_id,
+)
 from src.db import initialize_database
 from src.graph.persistence import create_persistent_checkpointer
 
@@ -418,7 +423,9 @@ def respond(
         gr.update(interactive=False),
     )
     start_time = time.perf_counter()
+    correlation_token = set_correlation_id(session_id)
     config = {"configurable": {"thread_id": session_id}}
+    log_event(logger, "chat.request_started")
 
     try:
         snapshot = graph.get_state(config)
@@ -438,6 +445,12 @@ def respond(
         if _is_waiting_for_input(snapshot):
             prompt = _interrupt_prompt(snapshot)
             chat_history.append({"role": "assistant", "content": prompt})
+            log_event(
+                logger,
+                "chat.verification_interrupted",
+                duration_ms=round((time.perf_counter() - start_time) * 1000, 2),
+                outcome="waiting_for_input",
+            )
             yield (
                 chat_history,
                 "⏸️ Waiting for your input",
@@ -451,6 +464,12 @@ def respond(
         if response_text:
             chat_history.append({"role": "assistant", "content": response_text})
         elapsed = time.perf_counter() - start_time
+        log_event(
+            logger,
+            "chat.request_completed",
+            duration_ms=round(elapsed * 1000, 2),
+            outcome="success",
+        )
         yield (
             chat_history,
             f"✅ Complete in {elapsed:.2f}s",
@@ -458,8 +477,15 @@ def respond(
             session_id,
             gr.update(interactive=True),
         )
-    except Exception:
-        logger.exception("Chat graph invocation failed")
+    except Exception as error:  # noqa: BLE001 - shield UI from graph/library failures
+        log_event(
+            logger,
+            "chat.request_failed",
+            level=logging.ERROR,
+            duration_ms=round((time.perf_counter() - start_time) * 1000, 2),
+            error_type=type(error).__name__,
+            outcome="error",
+        )
         chat_history.append(
             {
                 "role": "assistant",
@@ -473,6 +499,8 @@ def respond(
             session_id,
             gr.update(interactive=True),
         )
+    finally:
+        reset_correlation_id(correlation_token)
 
 
 def reset_conversation() -> tuple[list[dict[str, str]], str, str, str, Any]:
