@@ -1,3 +1,4 @@
+from contextvars import Context
 from types import SimpleNamespace
 from typing import Any
 
@@ -94,6 +95,25 @@ def test_ui_interrupt_prompt_is_shown_and_next_message_resumes() -> None:
     assert isinstance(graph.inputs[-1][0], Command)
     assert graph.inputs[-1][0].resume == "5"
     assert resumed[-1][0][-1]["content"] == "Verified and complete."
+
+
+def test_ui_response_generator_can_resume_in_a_different_context() -> None:
+    graph = FakeGraph()
+    updates = respond("need verification", [], "context-switch-thread", graph)
+    first_context = Context()
+    second_context = Context()
+    third_context = Context()
+
+    first = first_context.run(next, updates)
+    response = second_context.run(next, updates)
+    with pytest.raises(StopIteration):
+        third_context.run(next, updates)
+
+    assert "Processing" in first[1]
+    assert "Waiting for your input" in response[1]
+    assert "Customer ID, email address, or phone number" in (
+        response[0][-1]["content"]
+    )
 
 
 def test_each_chat_session_uses_its_own_thread_id() -> None:

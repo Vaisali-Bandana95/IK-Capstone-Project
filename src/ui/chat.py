@@ -451,6 +451,8 @@ def respond(
     config = {"configurable": {"thread_id": session_id}}
     log_event(logger, "chat.request_started")
 
+    output_status: str
+    output_message: Any
     try:
         snapshot = graph.get_state(config)
         if _is_waiting_for_input(snapshot):
@@ -475,32 +477,20 @@ def respond(
                 duration_ms=round((time.perf_counter() - start_time) * 1000, 2),
                 outcome="waiting_for_input",
             )
-            yield (
-                chat_history,
-                "⏸️ Waiting for your input",
-                gr.update(interactive=True),
-                session_id,
-                gr.update(interactive=True),
+            output_status = "⏸️ Waiting for your input"
+        else:
+            response_text = _latest_assistant_response(snapshot.values or {})
+            if response_text:
+                chat_history.append({"role": "assistant", "content": response_text})
+            elapsed = time.perf_counter() - start_time
+            log_event(
+                logger,
+                "chat.request_completed",
+                duration_ms=round(elapsed * 1000, 2),
+                outcome="success",
             )
-            return
-
-        response_text = _latest_assistant_response(snapshot.values or {})
-        if response_text:
-            chat_history.append({"role": "assistant", "content": response_text})
-        elapsed = time.perf_counter() - start_time
-        log_event(
-            logger,
-            "chat.request_completed",
-            duration_ms=round(elapsed * 1000, 2),
-            outcome="success",
-        )
-        yield (
-            chat_history,
-            f"✅ Complete in {elapsed:.2f}s",
-            gr.update(interactive=True),
-            session_id,
-            gr.update(interactive=True),
-        )
+            output_status = f"✅ Complete in {elapsed:.2f}s"
+        output_message = gr.update(interactive=True)
     except Exception as error:  # noqa: BLE001 - shield UI from graph/library failures
         log_event(
             logger,
@@ -516,15 +506,18 @@ def respond(
                 "content": _user_facing_error(error),
             }
         )
-        yield (
-            chat_history,
-            "❌ Request failed. Please try again.",
-            gr.update(interactive=True),
-            session_id,
-            gr.update(interactive=True),
-        )
+        output_status = "❌ Request failed. Please try again."
+        output_message = gr.update(interactive=True)
     finally:
         reset_correlation_id(correlation_token)
+
+    yield (
+        chat_history,
+        output_status,
+        output_message,
+        session_id,
+        gr.update(interactive=True),
+    )
 
 
 def reset_conversation() -> tuple[list[dict[str, str]], str, str, str, Any]:
